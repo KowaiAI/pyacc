@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.exe
+*.dll
+*.obj
+*.lst
+*.ast.json
