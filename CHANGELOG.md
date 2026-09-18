@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ### Added
 
+- **Continuous integration.** `.github/workflows/ci.yml` runs the test suite and the claims audit on GitHub's `windows-latest` runner for every pull request and every push to `main`. It is a required status check: branch protection refuses to merge a pull request unless it passes. Actions are pinned to full commit SHAs rather than tags, and the job runs with read-only permissions.
+
 - **An optional preprocessor, `accpp.py`.** Off by default: without a flag, `#` lines are still skipped exactly as before, so existing sources and the acc/gcc dual-compilable `examples/same.c` are unaffected.
 
   - `--pp` runs the bundled preprocessor: `#define` (object-like and function-like), `#undef`, `#include` with a search path, `#ifdef` / `#ifndef` / `#if` / `#elif` / `#else` / `#endif` with integer constant expressions, `#error`, `#pragma once`, line continuations, and `__FILE__` / `__LINE__`.
@@ -27,6 +29,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - `docs/VERIFICATION.md`, `docs/TOOLCHAIN.md`, `docs/demo.gif`, and this changelog.
 
 ### Fixed
+
+- **The claims audit would have failed in CI on a correct repo.** It compared gcc's output against the 54,465 bytes measured under gcc 16.1.0, but gcc's output size depends on which gcc built it, so any other version would report a true claim as stale. It also crashed with `FileNotFoundError` when gcc was not on `PATH` at all. Both found while writing the CI workflow, before it ever ran.
+
+  The first fix compared only the gcc version, which review on the pull request correctly pointed out is not enough: two toolchains can both report gcc 16.1.0 and still produce different sizes, because the binutils and C runtime objects differ. The README now names the exact compiler and linker builds that produced the figure, and the audit re-measures only when both match — using the linker gcc itself invokes (`gcc -print-prog-name=ld`), not whichever `ld` is first on `PATH`. Otherwise it skips and prints both identities side by side. A missing gcc skips cleanly, and deleting the identity lines from the README fails the audit.
 
 - **DLLs could not coexist in one process.** Every acc DLL declared `IMAGE_FILE_RELOCS_STRIPPED` and requested image base `0x180000000`. Because a DLL with relocations stripped cannot be rebased, the first acc DLL loaded into a process took that address and every subsequent one failed with `WinError 487` — permanently, for that process. Manual testing never caught it because it had only ever loaded one DLL at a time; the test suite loads several and failed immediately.
 

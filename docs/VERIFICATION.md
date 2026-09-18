@@ -231,7 +231,7 @@ Being explicit about the boundary:
 
 - **No fuzzing.** No randomized program generation, no differential testing against gcc on generated inputs. This is the largest gap.
 - **No optimizer tests**, because there is no optimizer.
-- **One machine, one OS.** Windows 11, x86-64. There is no CI matrix.
+- **Windows only.** CI runs the suite and the claims audit on GitHub's `windows-latest` runner for every pull request, and a failing run blocks the merge. There is no OS matrix: acc emits Windows PE images, and the compiler and interpreter have not been tested on Linux or macOS.
 - **Native execution depends on the host's policy.** Every program is run on the real CPU here, but on a machine with Smart App Control enabled those 16 cases are skipped rather than run. The interpreter and DLL routes are unaffected.
 - **No performance benchmarks.** Compile time and runtime speed are unmeasured.
 - **Unsupported language features are not tested for graceful failure.** Feeding acc a `struct` produces a parse error, but the quality of that error is not asserted.
