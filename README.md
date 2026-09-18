@@ -5,12 +5,12 @@
 ![deps](https://img.shields.io/badge/dependencies-none-success)
 ![toolchain](https://img.shields.io/badge/gcc%20%7C%20clang%20%7C%20msvc-not%20required-critical)
 ![builds](https://img.shields.io/badge/builds-reproducible-blueviolet)
-![tests](https://img.shields.io/badge/tests-67%2F67%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-84%2F84%20passing-brightgreen)
 [![CI](https://github.com/KowaiAI/pyacc/actions/workflows/ci.yml/badge.svg)](https://github.com/KowaiAI/pyacc/actions/workflows/ci.yml)
 
 **A C compiler, linker, and loader that produce native Windows executables without gcc, without clang, without MSVC, without an assembler, and without an external linker.**
 
-Not a wrapper. Not a transpiler. `acc` reads your C, encodes x86-64 machine code byte by byte, and writes the PE file itself. The only thing between your source and a running `.exe` is about 3,000 lines of dependency-free Python.
+Not a wrapper. Not a transpiler. `acc` reads your C, encodes x86-64 machine code byte by byte, and writes the PE file itself. The only thing between your source and a running `.exe` is about 3,400 lines of dependency-free Python.
 
 ```console
 $ python acc.py hello.c
@@ -35,7 +35,7 @@ Everything above is checked by a suite that builds real binaries and runs them:
 
 ```console
 $ python tests/run_tests.py
-  67 of 67 passed
+  84 of 84 passed
 ```
 
 | Group | Tests | What it establishes |
@@ -47,10 +47,11 @@ $ python tests/run_tests.py
 | Preprocessor | 8 | The optional preprocessor expands includes, macros and conditionals, `-D` flips a build, `#error` surfaces, and diagnostics map back to the header that caused them |
 | Diagnostics | 8 | Eight malformed programs each produce their specific error code and a real line number |
 | Properties | 6 | Byte-identical rebuilds, valid PE32+ structure, zeroed `TimeDateStamp`, correct DLL characteristics |
+| Regressions | 17 | One test per bug that shipped in 0.1.0, each written before its fix and failing against it; the 7 program cases also run natively. See the [changelog](CHANGELOG.md) |
 
 Three independent routes confirm a binary actually runs, and the suite uses all three: the **real CPU**, the **real Windows loader** (`ctypes.CDLL` calling exports with live arguments), and an **independent interpreter** that decodes instructions from raw bytes using REX/ModRM/SIB rules rather than recognizing acc's own output. The native-CPU group is differential — a disagreement between silicon and interpreter fails the test, so neither can quietly cover for the other.
 
-If your machine refuses to launch freshly built unsigned binaries — Windows Smart App Control does this, `WinError 4551` — those 16 cases report `SKIP` rather than passing silently, and the run tells you how many were skipped by OS policy.
+If your machine refuses to launch freshly built unsigned binaries — Windows Smart App Control does this, `WinError 4551` — the native cases report `SKIP` rather than passing silently, and every skip is listed with its reason.
 
 The suite earns its keep. It found a bug that manual testing had missed completely: every acc DLL declared its relocations stripped, so **only the first one loaded into a process could ever map** — the second failed with `WinError 487`. Three separately built DLLs now coexist, relocated by ASLR far from their preferred base:
 
@@ -102,7 +103,7 @@ Only gcc was benchmarked above, because gcc is what was installed on the test ma
 
 | | **acc** | **clang / LLVM** | **gcc** |
 |---|---|---|---|
-| Implementation | ~3,200 lines of Python | millions of lines of C++ | millions of lines of C |
+| Implementation | ~3,400 lines of Python | millions of lines of C++ | millions of lines of C |
 | Dependencies | none (stdlib only) | LLVM; a C++ toolchain to build it | a C toolchain to build it |
 | Pipeline | source → AST → machine code | source → AST → LLVM IR → optimized IR → machine code | source → AST → GENERIC → GIMPLE → RTL → machine code |
 | Intermediate representation | none | LLVM IR, the heart of the project | GIMPLE and RTL |
@@ -158,13 +159,13 @@ One difference cuts the other way, though: `gcc hello.c` does not compile anythi
    └─────────────────────┘
 ```
 
-Three tools, 3,266 lines, zero dependencies — plus an optional preprocessor:
+Three tools, 3,385 lines, zero dependencies — plus an optional preprocessor:
 
 | Tool | Lines | What it is |
 |---|---:|---|
-| `acc.py` | 2,024 | C compiler: lexer, recursive-descent parser, type checker, x86-64 instruction encoder, PE and COFF writers |
+| `acc.py` | 2,137 | C compiler: lexer, recursive-descent parser, type checker, x86-64 instruction encoder, PE and COFF writers |
 | `accld.py` | 550 | Linker: merges objects, resolves symbols, applies relocations, builds import/export tables, synthesizes the startup stub |
-| `accrun.py` | 692 | Loader: parses PE, maps sections, binds imports, interprets the machine code |
+| `accrun.py` | 698 | Loader: parses PE, maps sections, binds imports, interprets the machine code |
 | `accpp.py` | 448 | Preprocessor, **optional and off by default**: macros, includes, conditionals |
 
 ---

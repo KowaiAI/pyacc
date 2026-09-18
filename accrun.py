@@ -494,6 +494,12 @@ class CPU:
                 reg, rm = self.modrm(rex)
                 self.put(reg, self.read_rm(rm, 2), size)
                 return
+            if b2 in (0xBE, 0xBF):                           # movsx r, r/m8/16
+                reg, rm = self.modrm(rex)
+                width = 1 if b2 == 0xBE else 2
+                v = to_signed(self.read_rm(rm, width), 8 * width)
+                self.put(reg, v & MASK, size)
+                return
             if 0x80 <= b2 <= 0x8F:                           # jcc rel32
                 rel = self.f32()
                 if self.cond(b2 & 0xF):

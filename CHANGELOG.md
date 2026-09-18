@@ -25,10 +25,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
   - **Known limit:** system headers such as `<stdio.h>` still cannot be compiled in either mode. They contain inline assembly, `__attribute__`, structs and typedefs that acc cannot parse. The preprocessor is for your own headers and build-time conditionals.
 
 - **Native-CPU differential testing.** Every program test now also runs its binary on the real processor and requires the result to match both the hand-derived expectation and the interpreter's output. A disagreement between silicon and `accrun` fails the test, so neither can cover for a bug in the other. Test count rose from 43 to 59, and to 67 once the preprocessor tests landed.
-- **Skip reporting.** Where the host refuses to launch freshly built unsigned binaries — Windows Smart App Control, `WinError 4551` — the native cases report `SKIP` and the summary states how many were skipped by OS policy. They are never counted as passing.
+- **Skip reporting.** Where the host refuses to launch freshly built unsigned binaries — Windows Smart App Control, `WinError 4551` — the native cases report `SKIP`, and every skip is listed with its own reason (an earlier version of the summary line attributed every skip to OS policy, including skips caused by gcc being absent). Skips are never counted as passing.
 - `docs/VERIFICATION.md`, `docs/TOOLCHAIN.md`, `docs/demo.gif`, and this changelog.
 
 ### Fixed
+
+Compiler bugs that shipped in 0.1.0. Each has a regression test in the new `regressions` group, written before the fix and confirmed failing against 0.1.0. Every expected value was also cross-checked by building the same program with `gcc -std=c99 -pedantic-errors`.
+
+- **Any declaration with more than one declarator was broken.** `int a = 1, b = 2; return a + b;` failed with `undefined variable 'a'`. The parser wrapped the declarators in a synthetic block, and a block opens its own scope, so every variable vanished as soon as it was declared. No existing test declared two variables in one statement. Found while writing the test for the next item, which failed for this reason instead of its own.
+- **`int *a, b;` made `b` a pointer too.** The `*` was attached to the shared base type instead of the one declarator (C99 6.7.5).
+- **Constants with a leading zero were read as decimal.** `0777` was 777; it is now octal, 511 (C99 6.4.4.1). `08` is now error `E0007` rather than a silent 8.
+- **An integer constant too large for any type crashed acc** with a Python `struct.error` traceback. It is now error `E0008` (C99 6.4.4p2).
+- **Negative `int` results from the C library compared as positive.** Library functions return a 32-bit `int` in `eax`, and the upper half of `rax` is not part of the value, but acc read all of `rax`. `atoi("-5") < 0` was false, so a `getchar() == EOF` loop could never end. `strcmp` happened to work only because msvcrt's implementation leaves `rax` fully sign-extended — the ABI promises neither. acc now sign-extends after every imported function that returns `int` or `long`. The interpreter did **not** show this bug (its emulated library returned full 64-bit values); the native-CPU run did, as a "cpu and interpreter disagree" failure.
+- **`char` objects held 8 bytes.** `char c = 300;` kept 300, and so did `char` globals, parameters and return values. A `char` read through a pointer was unsigned (200 instead of -56), though plain `char` is signed on Windows. Every store into a `char` now keeps one signed byte (C99 6.3.1.3), and reads sign-extend. The interpreter learned `movsx` so it can still run this code.
+- **Internal compiler errors escaped as Python tracebacks.** Any failure that is not a diagnosable error in the program now reports `E9999 internal compiler error` and exits 3, in text and `--json` output.
 
 - **The claims audit would have failed in CI on a correct repo.** It compared gcc's output against the 54,465 bytes measured under gcc 16.1.0, but gcc's output size depends on which gcc built it, so any other version would report a true claim as stale. It now re-measures only when the local gcc matches the version the README quotes, and says so when it skips. It also crashed with `FileNotFoundError` when gcc was not on `PATH` at all; that now skips cleanly too. Both found while writing the CI workflow, before it ever ran.
 

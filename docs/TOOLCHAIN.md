@@ -318,15 +318,15 @@ Every classic tool has a counterpart here:
 | Classic | acc | Lines |
 |---|---|---:|
 | `cpp` (preprocessor) | `accpp.py` — optional, off by default, enabled with `--pp` | 448 |
-| `cc1` (compiler) | `lex()` 170 + `Parser` 382 + `CodeGen` 544 | 1,096 |
-| `as` (assembler) | `Emitter`: hand-encoded x86-64, ~40 instruction forms | 212 |
-| image writers | `build_pe` 206 + `build_coff` 95 | 301 |
+| `cc1` (compiler) | `lex()` 155 + `Parser` 374 + `CodeGen` 556 | 1,085 |
+| `as` (assembler) | `Emitter`: hand-encoded x86-64 | 200 |
+| image writers | `build_pe` 192 + `build_coff` 89 + `global_init_value` 10 | 291 |
 | `ld` (linker) | `accld.py` | 550 |
 | `crt2.o` (startup) | the 21-byte entry stub `accld` synthesizes | — |
-| OS loader | `accrun.py`: maps sections, binds imports, interprets | 692 |
-| `objdump -d` | `render_listing` | 113 |
+| OS loader | `accrun.py`: maps sections, binds imports, interprets | 698 |
+| `objdump -d` | `render_listing` | 17 |
 
-Line counts measured with the script in §9, not estimated.
+Each figure is the full span of that function or class in the source, from its `def`/`class` line to its last line, as reported by Python's `ast` module. `tests/audit_claims.py` re-measures every one of them, so they cannot drift.
 
 ---
 

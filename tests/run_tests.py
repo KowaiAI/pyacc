@@ -346,8 +346,146 @@ int main(void) {
 
 # ---------------------------------------------------------------------------
 
-def test_programs(tmp, verbose):
-    for case in PROGRAMS:
+# ---------------------------------------------------------------------------
+# regressions: one case per bug that shipped in 0.1.0, named after the bug.
+# Each was written before its fix and failed against the version with the bug.
+# The #include lines are skipped by acc's default mode; they are there so the
+# same sources also build under gcc, which is how the expectations were
+# cross-checked.
+# ---------------------------------------------------------------------------
+
+REGRESSIONS = [
+    {
+        "name": "variables declared together stay in scope",
+        "src": """
+#include <stdio.h>
+int main(void) {
+    int a = 1, b = 2;
+    int c, d;
+    c = 3;
+    d = 4;
+    printf("%d\\n", a + b + c + d);
+    return 0;
+}
+""",
+        # found while writing the pointer test below: a declaration with more
+        # than one declarator was wrapped in a synthetic block, and that block
+        # opened and closed its own scope, so every variable in it vanished
+        # immediately ("undefined variable 'a'")
+        "out": "10\n",
+        "exit": 0,
+    },
+    {
+        "name": "each declarator gets its own pointer",
+        "src": """
+#include <stdio.h>
+int main(void) {
+    int x = 5;
+    int *a = &x, b = 7;
+    b = b + 1;
+    printf("%d %d\\n", *a, b);
+    return 0;
+}
+""",
+        # C99 6.7.5: the * belongs to one declarator, so b is a plain int.
+        # The bug made b an int*, so b + 1 advanced by a pointer step.
+        "out": "5 8\n",
+        "exit": 0,
+    },
+    {
+        "name": "octal integer constants",
+        "src": """
+#include <stdio.h>
+int main(void) {
+    printf("%d %d %d %d\\n", 0777, 010, 0, 00);
+    return 0;
+}
+""",
+        # C99 6.4.4.1: a leading 0 makes the constant octal
+        "out": "511 8 0 0\n",
+        "exit": 0,
+    },
+    {
+        "name": "negative int returned by the C library",
+        "src": """
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(void) {
+    printf("%d\\n", strcmp("a", "b") < 0);
+    printf("%d\\n", atoi("-5") < 0);
+    printf("%d\\n", atoi("-5") == -5);
+    return 0;
+}
+""",
+        # the library returns a 32-bit int in eax. The bug read all of rax, so
+        # -1 arrived as 4294967295 and every negative result compared positive.
+        "out": "1\n1\n1\n",
+        "exit": 0,
+    },
+    {
+        "name": "char objects hold one signed byte",
+        "src": """
+#include <stdio.h>
+char g = 200;
+int main(void) {
+    char c = 300;
+    char d = 200;
+    printf("%d %d %d\\n", c, d, g);
+    return 0;
+}
+""",
+        # plain char is signed on Windows. Converting an out-of-range value is
+        # implementation-defined (C99 6.3.1.3p3); like gcc, acc wraps modulo 256.
+        # The bug stored all 8 bytes, so c printed 300.
+        "out": "44 -56 -56\n",
+        "exit": 0,
+    },
+    {
+        "name": "char parameters and returns hold one signed byte",
+        "src": """
+#include <stdio.h>
+int show(char c) { return c; }
+char make(void) { return 300; }
+int main(void) {
+    printf("%d %d\\n", show(300), make());
+    return 0;
+}
+""",
+        # a prototyped call converts the argument to the parameter type
+        # (C99 6.5.2.2p7), and return converts to the return type (6.8.6.4p3)
+        "out": "44 44\n",
+        "exit": 0,
+    },
+    {
+        "name": "char read through a pointer is signed",
+        "src": """
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+    char *p = malloc(4);
+    *p = 200;
+    printf("%d\\n", *p);
+    free(p);
+    return 0;
+}
+""",
+        # the bug loaded with movzx, so the byte came back as 200
+        "out": "-56\n",
+        "exit": 0,
+    },
+]
+
+REGRESSION_DIAGNOSTICS = [
+    ("08 is not an octal constant", "int main(void) { return 08; }", "E0007"),
+    ("integer constant too large",
+     "int main(void) { return 99999999999999999999; }", "E0008"),
+]
+
+
+def test_programs(tmp, verbose, cases=None, group="programs",
+                  native_group="native cpu"):
+    for case in (PROGRAMS if cases is None else cases):
         base = case["name"].replace(" ", "_").replace("(", "").replace(")", "")
         cpath = os.path.join(tmp, base + ".c")
         epath = os.path.join(tmp, base + ".exe")
@@ -356,7 +494,7 @@ def test_programs(tmp, verbose):
 
         r = run([PY, ACC, cpath, "-o", epath])
         if r.returncode != 0:
-            record("programs", case["name"], False,
+            record(group, case["name"], False,
                    "compile failed", r.stderr.strip()[:400])
             continue
 
@@ -365,7 +503,7 @@ def test_programs(tmp, verbose):
         ok_exit = r.returncode == case["exit"]
         if verbose:
             sys.stderr.write("--- %s ---\n%s" % (case["name"], r.stdout))
-        record("programs", case["name"], ok_out and ok_exit,
+        record(group, case["name"], ok_out and ok_exit,
                "" if (ok_out and ok_exit) else
                ("stdout mismatch" if not ok_out else
                 "exit code %d, expected %d" % (r.returncode, case["exit"])),
@@ -379,20 +517,74 @@ def test_programs(tmp, verbose):
             n = subprocess.run([epath], capture_output=True, text=True,
                                timeout=120)
         except OSError as e:
-            record("native cpu", case["name"], None,
+            record(native_group, case["name"], None,
                    "OS refused to launch the binary: %s" % e)
             continue
         except subprocess.TimeoutExpired:
-            record("native cpu", case["name"], False, "timed out")
+            record(native_group, case["name"], False, "timed out")
             continue
         agree = (n.stdout == r.stdout and n.returncode == r.returncode)
         correct = (n.stdout == case["out"] and n.returncode == case["exit"])
-        record("native cpu", case["name"], agree and correct,
+        record(native_group, case["name"], agree and correct,
                "" if (agree and correct) else
                ("cpu and interpreter disagree" if not agree
                 else "wrong result on cpu"),
                repr(n.stdout), repr(case["out"]))
 
+
+
+def test_regressions(tmp, verbose):
+    test_programs(tmp, verbose, cases=REGRESSIONS, group="regressions",
+                  native_group="regressions (native)")
+
+    for name, src, code in REGRESSION_DIAGNOSTICS:
+        p = os.path.join(tmp, "rdiag.c")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        r = run([PY, ACC, p, "-o", os.path.join(tmp, "rdiag.exe"), "--json"])
+        got = ""
+        ok = False
+        try:
+            d = json.loads(r.stdout)["diagnostics"][0]
+            got = d["code"]
+            ok = r.returncode == 1 and got == code
+        except Exception:
+            got = (r.stdout + r.stderr).strip()[:160]
+        record("regressions", "%s -> %s" % (name, code), ok, "", got, code)
+
+    # Anything that is not a CompileError used to escape as a Python
+    # traceback. It must become a diagnostic (exit 3, code E9999) instead.
+    import io
+    import contextlib
+    sys.path.insert(0, ROOT)
+    import acc as acc_mod
+    src = os.path.join(tmp, "ice.c")
+    with open(src, "w", encoding="utf-8") as fh:
+        fh.write("int main(void) { return 0; }\n")
+    real = acc_mod.CodeGen.generate
+
+    def boom(self):
+        raise KeyError("simulated internal fault")
+
+    acc_mod.CodeGen.generate = boom
+    out = io.StringIO()
+    code = None
+    try:
+        with contextlib.redirect_stdout(out):
+            code = acc_mod.main(["acc", src, "-o",
+                                 os.path.join(tmp, "ice.exe"), "--json"])
+    except BaseException as e:
+        out.write("escaped: %r" % (e,))
+    finally:
+        acc_mod.CodeGen.generate = real
+    ok = False
+    try:
+        ok = (code == 3 and
+              json.loads(out.getvalue())["diagnostics"][0]["code"] == "E9999")
+    except Exception:
+        pass
+    record("regressions", "internal fault becomes E9999, not a traceback", ok,
+           "", out.getvalue()[:160], "exit 3, E9999")
 
 def test_dll(tmp, verbose):
     src = """
@@ -618,7 +810,7 @@ def test_preprocessor(tmp, verbose):
                    r.stderr.strip()[:200])
     else:
         record("preprocessor", "external cpp (gcc -E)", None,
-               "no gcc on this machine")
+               "gcc not found on PATH")
 
 
 def test_diagnostics(tmp, verbose):
@@ -695,6 +887,7 @@ def main(argv):
     tmp = tempfile.mkdtemp(prefix="acctest_")
     try:
         test_programs(tmp, verbose)
+        test_regressions(tmp, verbose)
         test_dll(tmp, verbose)
         test_linker(tmp, verbose)
         test_preprocessor(tmp, verbose)
@@ -738,7 +931,9 @@ def main(argv):
     if failed:
         sys.stdout.write(", %d failed" % len(failed))
     if skipped:
-        sys.stdout.write(", %d skipped by OS policy" % len(skipped))
+        # each SKIP line above states its own reason; don't attribute them
+        # all to one cause here
+        sys.stdout.write(", %d skipped (reasons listed above)" % len(skipped))
     sys.stdout.write("\n")
     return len(failed)
 

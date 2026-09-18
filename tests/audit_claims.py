@@ -14,6 +14,7 @@ Exit code is the number of stale claims, so CI can gate on it.
 
 import os
 import re
+import ast
 import sys
 import json
 import shutil
@@ -66,6 +67,33 @@ def main():
           "%s lines, zero dependencies" % format(total, ",") in readme)
     check("TOOLCHAIN accld count (%d)" % counts["accld.py"],
           "| `accld.py` | %d |" % counts["accld.py"] in tool)
+
+    # -- per-component spans in TOOLCHAIN.md's mapping table -----------------
+    # Each is the span of one function or class, def line to last line, as
+    # Python's ast reports it. These drifted once, and one of them (113 for
+    # render_listing) was mis-measured from the start, so they are checked.
+    tree = ast.parse(read("acc.py"))
+    span = {n.name: n.end_lineno - n.lineno + 1 for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+    cc1 = span["lex"] + span["Parser"] + span["CodeGen"]
+    check("TOOLCHAIN cc1 row (lex %d + Parser %d + CodeGen %d)"
+          % (span["lex"], span["Parser"], span["CodeGen"]),
+          "`lex()` %d + `Parser` %d + `CodeGen` %d | %s |"
+          % (span["lex"], span["Parser"], span["CodeGen"], format(cc1, ","))
+          in tool)
+    check("TOOLCHAIN Emitter row (%d)" % span["Emitter"],
+          "hand-encoded x86-64 | %d |" % span["Emitter"] in tool)
+    writers = span["build_pe"] + span["build_coff"] + span["global_init_value"]
+    check("TOOLCHAIN image writers row (%d)" % writers,
+          "`build_pe` %d + `build_coff` %d + `global_init_value` %d | %d |"
+          % (span["build_pe"], span["build_coff"], span["global_init_value"],
+             writers) in tool)
+    check("TOOLCHAIN render_listing row (%d)" % span["render_listing"],
+          "`render_listing` | %d |" % span["render_listing"] in tool)
+    check("TOOLCHAIN accrun row (%d)" % counts["accrun.py"],
+          "interprets | %d |" % counts["accrun.py"] in tool)
+    check("TOOLCHAIN accpp row (%d)" % counts["accpp.py"],
+          "enabled with `--pp` | %d |" % counts["accpp.py"] in tool)
 
     # -- the size comparison, both compilers on one source -----------------
     _, acc_exe = build(["examples/same.c"], "_audit_acc.exe")

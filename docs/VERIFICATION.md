@@ -4,7 +4,7 @@
 
 ```console
 $ python tests/run_tests.py
-  67 of 67 passed
+  84 of 84 passed
 ```
 
 ---
@@ -56,6 +56,27 @@ That rule has teeth. Writing this suite produced one genuine compiler bug and th
     [PASS] exit code propagation
     [PASS] prime sieve by trial division
 
+  REGRESSIONS
+    [PASS] variables declared together stay in scope
+    [PASS] each declarator gets its own pointer
+    [PASS] octal integer constants
+    [PASS] negative int returned by the C library
+    [PASS] char objects hold one signed byte
+    [PASS] char parameters and returns hold one signed byte
+    [PASS] char read through a pointer is signed
+    [PASS] 08 is not an octal constant -> E0007
+    [PASS] integer constant too large -> E0008
+    [PASS] internal fault becomes E9999, not a traceback
+
+  REGRESSIONS (NATIVE)
+    [PASS] variables declared together stay in scope
+    [PASS] each declarator gets its own pointer
+    [PASS] octal integer constants
+    [PASS] negative int returned by the C library
+    [PASS] char objects hold one signed byte
+    [PASS] char parameters and returns hold one signed byte
+    [PASS] char read through a pointer is signed
+
   DLL
     [PASS] build a DLL
     [PASS] Windows loader accepts the DLL
@@ -101,7 +122,7 @@ That rule has teeth. Writing this suite produced one genuine compiler bug and th
     [PASS] DLL sets IMAGE_FILE_DLL and exports
     [PASS] DLL has no entry point
 
-  67 of 67 passed
+  84 of 84 passed
 ```
 
 The runner exits with the number of failures, so CI can gate on it. `--json` emits the same results as structured data.
@@ -114,11 +135,11 @@ A compiler that only checks its own work is checking nothing. Each of these rout
 
 ### 1. The real CPU
 
-All 16 program binaries are executed directly by Windows. No emulation anywhere in that path — the processor decodes acc's bytes.
+All 23 program binaries (16 programs and 7 regression programs) are executed directly by Windows. No emulation anywhere in that path — the processor decodes acc's bytes.
 
 Each native run must satisfy two conditions: match the hand-derived expected output, **and** match what the interpreter produced for the same file. That makes this group differential. A disagreement between silicon and interpreter fails the test, so neither can quietly cover for a bug in the other.
 
-One caveat, stated plainly because it changes what this group proves on other machines. Windows **Smart App Control blocked every freshly built unsigned binary** through most of this project's development (`WinError 4551`) — that is why `accrun` exists at all. The machine's owner has since switched Smart App Control off, which is why all 16 now run natively here. Where it is enabled, these cases report `SKIP` and the summary states how many were skipped by OS policy. They are never silently counted as passing.
+One caveat, stated plainly because it changes what this group proves on other machines. Windows **Smart App Control blocked every freshly built unsigned binary** through most of this project's development (`WinError 4551`) — that is why `accrun` exists at all. Its state on the development machine has not been stable: it was switched off for a while, during which every native case ran, and on 2026-09-18 it read as enabled again and blocked one of the 23 binaries in a local run. Where it is enabled, affected cases report `SKIP`, each with its reason, and are never counted as passing. GitHub's CI runners do not enforce Smart App Control, so the native group runs in full on every pull request — that run is the one to trust for native results.
 
 ### 2. The real Windows loader
 

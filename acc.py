@@ -128,6 +128,7 @@ def lex(src, path):
 
         if c.isdigit():
             j = i
+            decimal = False
             if src[i:i + 2].lower() == "0x":
                 j = i + 2
                 while j < n and src[j] in "0123456789abcdefABCDEF":
@@ -138,7 +139,29 @@ def lex(src, path):
             else:
                 while j < n and src[j].isdigit():
                     j += 1
-                val = int(src[i:j])
+                text = src[i:j]
+                if len(text) > 1 and text[0] == "0":
+                    # a leading 0 makes the constant octal (C99 6.4.4.1)
+                    for d in text:
+                        if d in "89":
+                            err("E0007", "invalid digit '%s' in octal "
+                                "constant %s" % (d, text),
+                                "a leading 0 means octal; drop it for a "
+                                "decimal number")
+                    val = int(text, 8)
+                else:
+                    decimal = True
+                    val = int(text)
+            # C99 6.4.4p2: a constant must be representable in some type.
+            # acc has only signed 64-bit integers until its type system is
+            # rebuilt, so a decimal constant must fit in a signed 64-bit
+            # value, and a hex or octal one in 64 bits (kept as its bit
+            # pattern, as unsigned long long would be).
+            if (decimal and val > 0x7FFFFFFFFFFFFFFF) or val > 0xFFFFFFFFFFFFFFFF:
+                err("E0008", "integer constant %s is too large for any "
+                    "integer type" % src[i:j])
+            if val > 0x7FFFFFFFFFFFFFFF:
+                val -= 1 << 64
             col += j - i
             i = j
             toks.append(("num", val, sl, sc))
@@ -330,17 +353,22 @@ class Parser:
         return {"funcs": funcs, "globals": globs, "externs": externs,
                 "extern_globals": extern_globals, "strings": self.strings}
 
-    def parse_type(self):
+    def parse_base_type(self):
         t = self.peek()
         if not (t[0] == "kw" and t[1] in ("int", "char", "void")):
             self.err("E0102",
                      "expected a type (int, char or void), found %r"
                      % (str(t[1]),), t)
         self.next()
-        ty = {"int": T_INT, "char": T_CHAR, "void": T_VOID}[t[1]]
+        return {"int": T_INT, "char": T_CHAR, "void": T_VOID}[t[1]]
+
+    def parse_pointers(self, ty):
         while self.accept("punct", "*"):
             ty = T("ptr", ty)
         return ty
+
+    def parse_type(self):
+        return self.parse_pointers(self.parse_base_type())
 
     def parse_function(self, ret, name, nt):
         self.expect("punct", "(")
@@ -415,9 +443,12 @@ class Parser:
 
     def parse_decl(self):
         t = self.peek()
-        ty = self.parse_type()
+        base = self.parse_base_type()
         decls = []
         while True:
+            # the * belongs to each declarator, not to the shared base type:
+            # in "int *a, b;" only a is a pointer (C99 6.7.5)
+            ty = self.parse_pointers(base)
             nt = self.expect("id", what="a variable name")
             init = None
             if self.accept("punct", "="):
@@ -429,7 +460,10 @@ class Parser:
         self.expect("punct", ";")
         if len(decls) == 1:
             return decls[0]
-        return {"k": "block", "body": decls, "line": t[2]}
+        # Several declarators in one declaration. This is deliberately not a
+        # "block": a block opens its own scope, which made every variable in
+        # "int a, b;" vanish the moment it was declared.
+        return {"k": "decls", "body": decls, "line": t[2]}
 
     def parse_if(self):
         t = self.next()
@@ -744,7 +778,14 @@ class Emitter:
         self.emit(b"\x48\x8B\x00", "mov rax, [rax]")
 
     def load_byte_at_rax(self):
-        self.emit(b"\x48\x0F\xB6\x00", "movzx rax, byte [rax]")
+        # plain char is signed on Windows, so a char read sign-extends
+        self.emit(b"\x48\x0F\xBE\x00", "movsx rax, byte [rax]")
+
+    def movsx_rax_al(self):
+        self.emit(b"\x48\x0F\xBE\xC0", "movsx rax, al")
+
+    def movsx_rcx_cl(self):
+        self.emit(b"\x48\x0F\xBE\xC9", "movsx rcx, cl")
 
     def store_qword_at_rcx(self):
         self.emit(b"\x48\x89\x01", "mov [rcx], rax")
@@ -789,6 +830,9 @@ class Emitter:
 
     def cqo(self):
         self.emit(b"\x48\x99", "cqo")
+
+    def movsxd_rax_eax(self):
+        self.emit(b"\x48\x63\xC0", "movsxd rax, eax")
 
     def idiv_rcx(self):
         self.emit(b"\x48\xF7\xF9", "idiv rcx")
@@ -842,6 +886,15 @@ LIBC_RET = {
     "strlen": T_INT, "strcmp": T_INT, "atoi": T_INT, "abs": T_INT,
     "rand": T_INT, "fflush": T_INT, "time": T_INT, "clock": T_INT,
     "system": T_INT, "toupper": T_INT, "tolower": T_INT,
+}
+
+# Library functions whose C return type is int or long: 32 bits on Win64,
+# returned in eax with the upper half of rax undefined. acc's own int is
+# still 64-bit, so these results are sign-extended after the call. strlen
+# (size_t) and time (time_t) really are 64-bit and must not be.
+LIBC_RET_INT32 = {
+    "printf", "puts", "putchar", "getchar", "strcmp", "atoi", "abs",
+    "rand", "fflush", "clock", "system", "toupper", "tolower",
 }
 
 
@@ -986,6 +1039,12 @@ class CodeGen:
             self.scopes[0][p["name"]] = {"where": "local", "off": off,
                                          "type": p["type"], "name": p["name"]}
             em.store_arg_reg(i, off, p["name"])
+            if p["type"]["k"] == "char":
+                # a prototyped call converts the argument to the parameter
+                # type (C99 6.5.2.2p7); do it here so every caller is covered
+                em.load_local(off, p["name"])
+                self.narrow(p["type"])
+                em.store_local_rax(off, p["name"])
 
         self.gen_stmt(f["body"])
 
@@ -1008,6 +1067,13 @@ class CodeGen:
             self.scopes.pop()
             return
 
+        if k == "decls":
+            # declarators that share one declaration live in the enclosing
+            # scope, so no scope is opened here
+            for st in s["body"]:
+                self.gen_stmt(st)
+            return
+
         if k == "empty":
             return
 
@@ -1015,6 +1081,7 @@ class CodeGen:
             off = (s["slot"] + 1) * 8
             if s["init"] is not None:
                 self.gen_expr(s["init"])
+                self.narrow(s["type"])
             else:
                 em.xor_eax_eax()
             em.store_local_rax(off, s["name"])
@@ -1029,6 +1096,8 @@ class CodeGen:
         if k == "ret":
             if s["e"] is not None:
                 self.gen_expr(s["e"])
+                # return converts to the function's return type (6.8.6.4p3)
+                self.narrow(self.cur_func["ret"])
             else:
                 em.xor_eax_eax()
             em.leave()
@@ -1173,6 +1242,16 @@ class CodeGen:
         raise CompileError("E9002", "internal: unknown expression %r" % k,
                            e.get("line", 0), 1)
 
+    def narrow(self, ty):
+        """Convert the value in rax to ty's range before storing it.
+
+        acc still keeps every object in an 8-byte slot, so a char has to be
+        cut down to one signed byte on the way in (C99 6.3.1.3); otherwise
+        "char c = 300;" kept 300.
+        """
+        if ty["k"] == "char":
+            self.em.movsx_rax_al()
+
     def gen_inc(self, e, post):
         em = self.em
         sym = self.lookup(e["e"]["name"], e["e"])
@@ -1186,6 +1265,8 @@ class CodeGen:
             em.load_global(sym["name"])
         em.mov_rcx_rax()
         em.add_rcx_imm(step)
+        if ty["k"] == "char":
+            em.movsx_rcx_cl()              # a char holds one signed byte
         if sym["where"] == "local":
             em.store_local_rcx(sym["off"], sym["name"])
         else:
@@ -1200,6 +1281,7 @@ class CodeGen:
         if target["k"] == "var":
             sym = self.lookup(target["name"], target)
             self.gen_expr(e["v"])
+            self.narrow(sym["type"])
             if sym["where"] == "local":
                 em.store_local_rax(sym["off"], sym["name"])
             else:
@@ -1356,6 +1438,8 @@ class CodeGen:
             em.call_func(name)
         else:
             em.call_import(name)
+            if name in LIBC_RET_INT32:
+                em.movsxd_rax_eax()
         em.add_rsp(32 + 8 * nstack + 8 * pad)
         em.depth = depth0
         return ret
@@ -1393,6 +1477,18 @@ def align_up(v, a):
     return (v + a - 1) // a * a
 
 
+def global_init_value(g):
+    """A global's initial value, converted to the range of its type.
+
+    Globals still occupy 8 bytes each, so a char global is stored as its
+    sign-extended byte: "char g = 200;" holds -56, as it does under gcc.
+    """
+    v = g["init"]
+    if g["type"]["k"] == "char":
+        v = ((v + 128) & 0xFF) - 128
+    return v
+
+
 def build_pe(em, strings, globals_list, imports, entry_off=0,
              dll=False, exports=None, module_name="module.dll"):
     text = bytearray(em.buf)
@@ -1413,7 +1509,7 @@ def build_pe(em, strings, globals_list, imports, entry_off=0,
     glob_rva = {}
     for g in globals_list:
         glob_rva[g["name"]] = data_rva + len(data)
-        data += struct.pack("<q", g["init"])
+        data += struct.pack("<q", global_init_value(g))
 
     while len(data) % 8:
         data += b"\x00"
@@ -1612,7 +1708,7 @@ def build_coff(em, cg, prog):
     glob_off = {}
     for g in prog["globals"]:
         glob_off[g["name"]] = len(data)
-        data += struct.pack("<q", g["init"])
+        data += struct.pack("<q", global_init_value(g))
 
     relocs = []
     for kind, key, pos in em.rip:
@@ -1981,8 +2077,25 @@ def main(argv):
             sys.stderr.write(e.render(rep_path, text) + "\n")
             e.line = shown
         return 1
-    except RecursionError:
-        sys.stderr.write("acc: expression nested too deeply\n")
+    except Exception as e:
+        # Anything that is not a CompileError is a bug in acc, not in the
+        # program being compiled. Report it as a diagnostic (exit 3) instead
+        # of letting a Python traceback escape.
+        if isinstance(e, RecursionError):
+            msg = "expression or statement nested too deeply"
+        else:
+            msg = "internal compiler error: %s: %s" % (type(e).__name__, e)
+        hint = ("this is a bug in acc; please report it with the source "
+                "file that triggered it")
+        if as_json:
+            json.dump({"ok": False, "diagnostics": [{
+                "severity": "error", "code": "E9999", "file": src_path,
+                "line": 0, "col": 0, "message": msg, "hint": hint}]},
+                sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            sys.stderr.write("%s: error[E9999]: %s\n  hint: %s\n"
+                             % (src_path, msg, hint))
         return 3
 
     if do_run:
