@@ -1,0 +1,46 @@
+# Runs on every pull request to main, and is a required status check:
+# branch protection will not let a PR merge unless this job passes.
+#
+# Windows only, because acc emits Windows PE images and the suite executes
+# them natively and loads DLLs through the real Windows loader.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: the job only needs to read the code.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      # Actions are pinned to full commit SHAs rather than tags, so a moved
+      # or compromised tag cannot change what runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Toolchain versions
+        shell: bash
+        run: |
+          python --version
+          if command -v gcc >/dev/null; then gcc --version | head -1; else echo "gcc: not installed"; fi
+
+      - name: Test suite
+        run: python tests/run_tests.py
+
+      - name: Claims audit
+        run: python tests/audit_claims.py

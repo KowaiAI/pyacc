@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import hashlib
 import subprocess
 
@@ -73,17 +74,34 @@ def main():
     check("README acc binary size (%d)" % a,
           "**%s bytes**" % format(a, ",") in readme)
 
-    gcc_exe = os.path.join(ROOT, "_audit_gcc.exe")
-    r = subprocess.run(["gcc", "-o", gcc_exe,
-                        os.path.join(ROOT, "examples/same.c")],
-                       capture_output=True, text=True)
-    if r.returncode == 0:
-        temps.append(gcc_exe)
-        g = os.path.getsize(gcc_exe)
-        check("README gcc binary size (%d)" % g,
-              "%s bytes" % format(g, ",") in readme)
+    # gcc's output size depends on which gcc built it, so the README's figure
+    # can only be re-measured with the version the README names. Any other
+    # gcc (a CI runner's, say) would "fail" a claim that is actually true.
+    gcc = shutil.which("gcc")
+    m = re.search(r"\| gcc ([\d.]+) \(", readme)
+    quoted = m.group(1) if m else None
+    have = None
+    if gcc:
+        have = subprocess.run([gcc, "-dumpfullversion"], capture_output=True,
+                              text=True).stdout.strip() or None
+    if not gcc:
+        print("  [--] gcc not on PATH; gcc size not re-measured")
+    elif quoted and have != quoted:
+        print("  [--] this is gcc %s, the README quotes gcc %s; a different "
+              "compiler gives a different size, so not re-measured"
+              % (have, quoted))
     else:
-        print("  [--] gcc not available; size comparison not re-measured")
+        gcc_exe = os.path.join(ROOT, "_audit_gcc.exe")
+        r = subprocess.run([gcc, "-o", gcc_exe,
+                            os.path.join(ROOT, "examples/same.c")],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            temps.append(gcc_exe)
+            g = os.path.getsize(gcc_exe)
+            check("README gcc binary size (%d)" % g,
+                  "%s bytes" % format(g, ",") in readme)
+        else:
+            check("gcc builds examples/same.c", False, r.stderr.strip()[:200])
 
     # -- the DLL banner quoted in the README -------------------------------
     r, dll = build(["examples/mathlib.c", "--dll"], "_audit_mathlib.dll")

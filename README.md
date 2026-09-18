@@ -6,6 +6,7 @@
 ![toolchain](https://img.shields.io/badge/gcc%20%7C%20clang%20%7C%20msvc-not%20required-critical)
 ![builds](https://img.shields.io/badge/builds-reproducible-blueviolet)
 ![tests](https://img.shields.io/badge/tests-67%2F67%20passing-brightgreen)
+[![CI](https://github.com/KowaiAI/pyacc/actions/workflows/ci.yml/badge.svg)](https://github.com/KowaiAI/pyacc/actions/workflows/ci.yml)
 
 **A C compiler, linker, and loader that produce native Windows executables without gcc, without clang, without MSVC, without an assembler, and without an external linker.**
 
@@ -66,7 +67,9 @@ $ python tests/audit_claims.py
   0 stale claim(s)
 ```
 
-It re-measures every figure quoted here — line counts, binary sizes, the DLL banner, the test total — and fails if any no longer matches reality.
+It re-measures every figure quoted here — line counts, binary sizes, the DLL banner, the test total — and fails if any no longer matches reality. The one exception is gcc's binary size, which is only re-measured under the gcc version this README names: a different gcc legitimately produces a different size.
+
+Both run on every pull request in [CI](.github/workflows/ci.yml), and `main` is branch-protected so a pull request cannot merge unless they pass.
 
 > **→ [Verification](docs/VERIFICATION.md)** — the full test output, what each test pins down and why, the three expectations *I* got wrong (two of them assuming an evaluation order C never promised), and an explicit list of what is **not** tested.
 
