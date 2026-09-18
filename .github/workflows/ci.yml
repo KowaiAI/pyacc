@@ -1,5 +1,6 @@
-# Runs on every pull request to main, and is a required status check:
-# branch protection will not let a PR merge unless this job passes.
+# Runs on every pull request, whatever branch it targets, so stacked pull
+# requests are checked too. On main it is a required status check: branch
+# protection will not let a pull request merge unless this job passes.
 #
 # Windows only, because acc emits Windows PE images and the suite executes
 # them natively and loads DLLs through the real Windows loader.
@@ -8,7 +9,6 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:

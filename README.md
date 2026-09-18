@@ -67,7 +67,7 @@ $ python tests/audit_claims.py
   0 stale claim(s)
 ```
 
-It re-measures every figure quoted here — line counts, binary sizes, the DLL banner, the test total — and fails if any no longer matches reality. The one exception is gcc's binary size, which is only re-measured under the gcc version this README names: a different gcc legitimately produces a different size.
+It re-measures every figure quoted here — line counts, binary sizes, the DLL banner, the test total — and fails if any no longer matches reality. The one exception is gcc's binary size, which is only re-measured under the exact compiler and linker builds this README names: a different toolchain legitimately produces a different size, even at the same gcc version.
 
 Both run on every pull request in [CI](.github/workflows/ci.yml), and `main` is branch-protected so a pull request cannot merge unless they pass.
 
@@ -91,6 +91,11 @@ The identical source file — [`examples/same.c`](examples/same.c), a `printf` a
 |---|---|
 | gcc 16.1.0 (MinGW-w64) | 54,465 bytes |
 | **acc 0.1.0** | **1,536 bytes** |
+
+The gcc figure depends on the whole toolchain, not just the gcc version, so here is exactly what produced it:
+
+- compiler: `gcc (MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r4) 16.1.0`
+- linker: `GNU ld (Binutils for MinGW-W64 x86_64, built by Brecht Sanders, r4) 2.47.20260726`
 
 35.5× smaller. Two caveats, because the bare number flatters acc. gcc links a full CRT startup and eleven libraries where acc calls straight into `msvcrt.dll`; and gcc's binary carries exception-unwinding tables, thread-local storage, an application manifest, and debug sections that acc does not emit at all. What gcc produces is the more capable artifact. [Where the other 53 KB goes](docs/TOOLCHAIN.md) breaks it down section by section.
 

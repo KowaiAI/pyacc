@@ -74,22 +74,43 @@ def main():
     check("README acc binary size (%d)" % a,
           "**%s bytes**" % format(a, ",") in readme)
 
-    # gcc's output size depends on which gcc built it, so the README's figure
-    # can only be re-measured with the version the README names. Any other
-    # gcc (a CI runner's, say) would "fail" a claim that is actually true.
+    # gcc's output size depends on the whole toolchain -- the gcc build, the
+    # binutils it links with, and the C runtime objects it pulls in -- not
+    # just the gcc version: two toolchains can both report gcc 16.1.0 and
+    # still produce different sizes. So the README names the exact compiler
+    # and linker builds, and the size is only re-measured when both match.
+    def identity(path):
+        """First line of `path --version`, without the program's own name."""
+        if not path:
+            return None
+        out = subprocess.run([path, "--version"], capture_output=True,
+                             text=True).stdout.splitlines()
+        line = out[0] if out else ""
+        # "gcc.exe (MinGW-W64 ...) 16.1.0" -> "(MinGW-W64 ...) 16.1.0"
+        i = line.find("(")
+        return line[i:].strip() if i >= 0 else line.strip() or None
+
+    q_gcc = re.search(r"compiler: `gcc (\(.+?\) [\d.]+)`", readme)
+    q_ld = re.search(r"linker: `GNU ld (\(.+?\) [\d.]+)`", readme)
+    check("README names the exact gcc toolchain it measured with",
+          q_gcc and q_ld, "compiler/linker identity lines are missing")
+
     gcc = shutil.which("gcc")
-    m = re.search(r"\| gcc ([\d.]+) \(", readme)
-    quoted = m.group(1) if m else None
-    have = None
+    have_gcc = have_ld = None
     if gcc:
-        have = subprocess.run([gcc, "-dumpfullversion"], capture_output=True,
-                              text=True).stdout.strip() or None
+        have_gcc = identity(gcc)
+        # the linker gcc itself will run, not whichever ld is first on PATH
+        ld = subprocess.run([gcc, "-print-prog-name=ld"], capture_output=True,
+                            text=True).stdout.strip()
+        have_ld = identity(ld if os.path.isabs(ld) else shutil.which(ld or "ld"))
+    want = (q_gcc.group(1) if q_gcc else None, q_ld.group(1) if q_ld else None)
     if not gcc:
         print("  [--] gcc not on PATH; gcc size not re-measured")
-    elif quoted and have != quoted:
-        print("  [--] this is gcc %s, the README quotes gcc %s; a different "
-              "compiler gives a different size, so not re-measured"
-              % (have, quoted))
+    elif (have_gcc, have_ld) != want:
+        print("  [--] this is not the toolchain the README measured with, so "
+              "the gcc size is not re-measured")
+        print("       here:   gcc %s | ld %s" % (have_gcc, have_ld))
+        print("       README: gcc %s | ld %s" % want)
     else:
         gcc_exe = os.path.join(ROOT, "_audit_gcc.exe")
         r = subprocess.run([gcc, "-o", gcc_exe,
